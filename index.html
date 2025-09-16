@@ -1,0 +1,409 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Dienstplan</title>
+  <style>
+    :root{--bg:#f6f7fb;--card:#fff;--ink:#111;--muted:#666;--line:#e5e7eb;--brand:#2563eb;--ok:#16a34a;--warn:#d97706;--bad:#dc2626}
+    html,body{margin:0;padding:0;background:var(--bg);color:var(--ink);font:12px/1.5 system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial}
+    .wrap{max-width:1200px;margin:24px auto;padding:0 12px}
+    .row{display:flex;gap:10px;flex-wrap:wrap}
+    .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px;box-shadow:0 1px 2px rgba(0,0,0,.04)}
+    h1{margin:0 0 6px;font-size:20px}
+    label{font-size:12px;color:var(--muted)}
+    input,select,button{font:inherit}
+    input[type=time]{width:92px}
+    input[type=text],input[type=number]{padding:6px 8px;border:1px solid var(--line);border-radius:10px}
+    select{padding:6px 8px;border:1px solid var(--line);border-radius:10px}
+    .btn{padding:8px 12px;border-radius:10px;border:1px solid var(--line);background:#fff;cursor:pointer}
+    .btn.primary{background:var(--brand);color:#fff;border-color:var(--brand)}
+    .muted{color:var(--muted)}
+    table{width:100%;border-collapse:separate;border-spacing:0;table-layout:fixed}
+    th,td{border-top:1px solid var(--line);border-bottom:1px solid var(--line);padding:6px 6px;text-align:center;vertical-align:top}
+    th{background:#f3f4f6;position:sticky;top:0;z-index:1}
+    td:first-child,th:first-child{text-align:left;border-left:1px solid var(--line)}
+    td:last-child,th:last-child{border-right:1px solid var(--line)}
+    .pill{display:inline-block;padding:2px 6px;border-radius:999px;border:1px solid var(--line);font-size:11px}
+    .pill.ok{background:#ecfdf5;border-color:#bbf7d0;color:#065f46}
+    .pill.warn{background:#fffbeb;border-color:#fde68a;color:#92400e}
+    .pill.bad{background:#fef2f2;border-color:#fecaca;color:#991b1b}
+
+    /* Tageszelle: Status oben, Notiz darunter, dann Zeiten */
+    td.day-cell{vertical-align:top; padding-top:12px; padding-bottom:12px;}
+    .day{display:flex;flex-direction:column;align-items:center;gap:12px}
+    .day select{width:100%}
+    .day .note-input{width:96%; margin-left:auto; margin-right:auto;}
+    .time-row{display:flex;gap:12px;justify-content:center;width:100%}
+    .time-row input[type=time]{width:82px}
+
+    /* Überstunden-Zelle zeigt Woche + kumuliert untereinander; mittig und leicht nach unten versetzt */
+    .u-line{line-height:1.2}
+    .u-sub{line-height:1.2; font-size:11px; color:var(--muted)}
+    th.col-ustd, td.col-ustd { vertical-align: middle !important; text-align: center; }
+    td.col-ustd .cellDiff { display:inline-block; margin-top:8px; }
+
+    /* Kumuliert-Spalte optisch ausblenden (Werte stehen in der Spalte Überstunden) */
+    thead th:last-child, tbody td:last-child{ display:none; }
+
+    /* Schmalere Mitarbeiter-Spalte + saubere Namensdarstellung */
+    table thead th:first-child{ width:120px !important; }
+    table tbody td:first-child{ width:120px !important; }
+    td:first-child > strong{ display:inline-block; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+    /* Druck: eigene Überschrift, normale H1 ausblenden */
+    .print-title{ display:none; font-size:16px; margin-bottom:10px; }
+    @media print{
+      h1, .no-print{ display:none !important; }
+      .print-title{ display:block; }
+    }
+  
+/* ---- Print pagination: 3 employees per page; avoid row splits ---- */
+@media print{
+  tr[data-emp]{ 
+    break-inside: avoid-page; 
+    page-break-inside: avoid; 
+    -webkit-region-break-inside: avoid;
+  }
+  tbody tr[data-emp]:not(:last-child):nth-of-type(3n){
+    break-after: page;
+    page-break-after: always;
+  }
+}
+
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <div class="row" style="align-items:center;justify-content:space-between">
+    <div>
+      <h1>Dienstplan</h1>
+      <div id="printTitle" class="print-title"></div>
+    </div>
+    <div class="row no-print">
+      <button class="btn" id="btnPrint">Drucken / PDF</button>
+      <button class="btn" id="btnBackup">Backup</button>
+      <button class="btn" id="btnRestore">Wiederherstellen</button>
+    </div>
+  </div>
+
+  <details class="card no-print" open>
+    <summary><strong>Einstellungen (Pausen)</strong></summary>
+    <div class="row" style="margin-top:8px">
+      <div><label>Keine Pause bis (Min)</label><br/><input type="number" id="noBreakMax" min="0" value="360"></div>
+      <div><label>Bis (Min) für Pause 1</label><br/><input type="number" id="midBreakMax" min="0" value="540"></div>
+      <div><label>Pause 1 (Min)</label><br/><input type="number" id="pause1" min="0" value="30"></div>
+      <div><label>Pause 2 (Min)</label><br/><input type="number" id="pause2" min="0" value="45"></div>
+      <div style="align-self:end"><button class="btn" id="btnSaveSettings">Speichern</button></div>
+    </div>
+  </details>
+
+  <details class="card no-print" open>
+    <summary><strong>Mitarbeiterpflege</strong></summary>
+    <div class="row" style="margin:8px 0;align-items:flex-end">
+      <div><label>Vorname</label><br/><input type="text" id="empName" placeholder="z. B. Anna" style="width:160px"></div>
+      <div><label>Wochen‑Soll (hh:mm)</label><br/><input type="text" id="empSoll" placeholder="40:00" style="width:100px"></div>
+      <div><label>Übertrag (±hh:mm)</label><br/><input type="text" id="empCarry" placeholder="00:00" style="width:100px"></div>
+      <div><button class="btn" id="btnAddEmp">Hinzufügen</button></div>
+    </div>
+    <div id="empList" class="row" style="gap:8px;flex-direction:column"></div>
+  </details>
+
+  <div class="row no-print" style="align-items:center;justify-content:space-between">
+    <div class="card" style="flex:1 1 auto"><span class="muted">Aktuelle Woche:</span> <strong id="weekTitle">–</strong></div>
+    <div class="card" style="flex:0 0 auto">
+      <button class="btn primary" id="btnNewWeek">Neue Woche</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <div id="weekTableWrap" style="overflow:auto"></div>
+  </div>
+</div>
+
+<script>
+// ===== Helpers =====
+var DB_KEY = 'flohkiste-web-v3';
+var DAYS = ['Montag','Dienstag','Mittwoch','Donnerstag','Freitag'];
+var STATUSES = ['Arbeitstag','Urlaub','Krank','Feiertag'];
+
+function toMin(hhmm){ if(!hhmm) return 0; var m=String(hhmm).trim().match(/^(-)?(\d{1,2}):(\d{2})$/); if(!m) return NaN; var s=m[1]? -1:1; var h=+m[2], mm=+m[3]; if(mm>59) return NaN; return s*(h*60+mm); }
+function fmt(m){ var s=m<0?'-':''; m=Math.abs(m); var h=Math.floor(m/60), mm=m%60; return s+String(h).padStart(2,'0')+':'+String(mm).padStart(2,'0'); }
+function minutes(a1,b1,a2,b2){
+  function rep(x){ return x ? x.replace('−','-') : x; }
+  function span(a,b){ if(!a||!b) return 0; var am=toMin(rep(a)), bm=toMin(rep(b)); if(isNaN(am)||isNaN(bm)) return 0; return Math.max(bm-am,0); }
+  return span(a1,b1)+span(a2,b2);
+}
+function weekKey(y,kw){ return y+'-KW'+String(kw).padStart(2,'0'); }
+function prevWeek(y,kw){ if(kw>1) return {y:y,kw:kw-1}; return {y:y-1,kw:53}; }
+function currentISOWeek(){ var d=new Date(); d.setHours(0,0,0,0); d.setDate(d.getDate()+3-((d.getDay()+6)%7)); var week1=new Date(d.getFullYear(),0,4); return 1+Math.round(((d-week1)/86400000-3+((week1.getDay()+6)%7))/7); }
+
+// ISO-Wochenbereich (Mo–So) als Label
+function pad2(n){ return String(n).padStart(2,'0'); }
+function isoWeekStartLocal(year, week){
+  var jan4 = new Date(year,0,4);
+  var day = (jan4.getDay()+6)%7;
+  var monWeek1 = new Date(jan4); monWeek1.setDate(jan4.getDate()-day);
+  var start = new Date(monWeek1); start.setDate(monWeek1.getDate()+(week-1)*7);
+  start.setHours(0,0,0,0); return start;
+}
+function isoWeekRangeLabel(year, week){
+  var mon=isoWeekStartLocal(year,week); var sun=new Date(mon); sun.setDate(mon.getDate()+6);
+  return pad2(mon.getDate())+'.'+pad2(mon.getMonth()+1)+'. - '+pad2(sun.getDate())+'.'+pad2(sun.getMonth()+1)+'.';
+}
+
+// ===== DB =====
+function loadDB(){ try{ return JSON.parse(localStorage.getItem(DB_KEY))||{} }catch(e){ return {} } }
+function saveDB(){ localStorage.setItem(DB_KEY, JSON.stringify(db)); }
+function ensureDB(d){
+  if(!d.settings) d.settings={};
+  if(typeof d.settings.noBreakMax !== 'number') d.settings.noBreakMax = 360;
+  if(typeof d.settings.midBreakMax !== 'number') d.settings.midBreakMax = 540;
+  if(typeof d.settings.pause1 !== 'number') d.settings.pause1 = 30;
+  if(typeof d.settings.pause2 !== 'number') d.settings.pause2 = 45;
+  if(!d.employees) d.employees=[];
+  if(!d.weeks) d.weeks={};
+  if(!d.current) d.current={year:new Date().getFullYear(), kw:currentISOWeek()};
+  return d;
+}
+
+var db = ensureDB(loadDB());
+
+// ===== Settings UI =====
+var noBreakMaxEl = document.getElementById('noBreakMax');
+var midBreakMaxEl = document.getElementById('midBreakMax');
+var pause1El = document.getElementById('pause1');
+var pause2El = document.getElementById('pause2');
+
+function renderSettings(){
+  noBreakMaxEl.value = db.settings.noBreakMax;
+  midBreakMaxEl.value = db.settings.midBreakMax;
+  pause1El.value = db.settings.pause1;
+  pause2El.value = db.settings.pause2;
+}
+renderSettings();
+document.getElementById('btnSaveSettings').onclick=function(){
+  db.settings.noBreakMax = +noBreakMaxEl.value || 0;
+  db.settings.midBreakMax = +midBreakMaxEl.value || 0;
+  db.settings.pause1 = +pause1El.value || 0;
+  db.settings.pause2 = +pause2El.value || 0;
+  if(db.settings.midBreakMax < db.settings.noBreakMax){ var t=db.settings.noBreakMax; db.settings.noBreakMax=db.settings.midBreakMax; db.settings.midBreakMax=t; }
+  saveDB(); alert('Einstellungen gespeichert');
+};
+
+// ===== Employees UI =====
+var empNameEl = document.getElementById('empName');
+var empSollEl = document.getElementById('empSoll');
+var empCarryEl = document.getElementById('empCarry');
+var empListEl = document.getElementById('empList');
+
+function addEmployee(){
+  var name=empNameEl.value.trim(); var soll=toMin(empSollEl.value.trim()); var carry=toMin(empCarryEl.value.trim()||'00:00');
+  if(!name){ alert('Name fehlt'); return; }
+  if(isNaN(soll)){ alert('Soll hh:mm'); return; }
+  if(isNaN(carry)){ alert('Übertrag hh:mm'); return; }
+  db.employees.push({id:'emp_'+Date.now(), name:name, sollMin:soll, carryMin:carry, active:true});
+  saveDB(); empNameEl.value=''; empSollEl.value=''; empCarryEl.value=''; renderEmployees(); renderWeek();
+}
+document.getElementById('btnAddEmp').onclick = addEmployee;
+
+function renderEmployees(){
+  if(!db.employees.length){ empListEl.innerHTML='<div class="muted">Noch keine Mitarbeiter</div>'; return; }
+  empListEl.innerHTML='';
+  db.employees.forEach(function(emp){
+    var row=document.createElement('div'); row.className='row'; row.style.alignItems='center';
+    row.innerHTML='<strong style="min-width:120px">'+emp.name+'</strong>\
+      <span class="muted">Soll</span> <input type="text" value="'+fmt(emp.sollMin)+'" style="width:90px" data-k="soll">\
+      <span class="muted">Übertrag</span> <input type="text" value="'+fmt(emp.carryMin)+'" style="width:90px" data-k="carry">\
+      <label class="muted" style="margin-left:auto"><input type="checkbox" '+(emp.active?'checked':'')+' data-k="active"> aktiv</label>\
+      <button class="btn" data-k="del">Entfernen</button>';
+    row.querySelector('[data-k="soll"]').onchange=function(e){ var v=toMin(e.target.value); if(isNaN(v)){alert('Format hh:mm'); e.target.value=fmt(emp.sollMin); return} emp.sollMin=v; saveDB(); renderWeek(); };
+    row.querySelector('[data-k="carry"]').onchange=function(e){ var v=toMin(e.target.value); if(isNaN(v)){alert('Format hh:mm'); e.target.value=fmt(emp.carryMin); return} emp.carryMin=v; saveDB(); };
+    row.querySelector('[data-k="active"]').onchange=function(e){ emp.active=!!e.target.checked; saveDB(); renderWeek(); };
+    row.querySelector('[data-k="del"]').onclick=function(){ if(confirm('Mitarbeiter entfernen?')){ db.employees=db.employees.filter(function(x){return x.id!==emp.id}); saveDB(); renderEmployees(); renderWeek(); } };
+    empListEl.appendChild(row);
+  });
+}
+renderEmployees();
+
+// ===== Week creation & storage =====
+function initWeek(y,kw){
+  var key=weekKey(y,kw); var w=db.weeks[key]; if(!w){ w={employees:{}}; db.weeks[key]=w; }
+  var prev=prevWeek(y,kw); var prevKey=weekKey(prev.y,prev.kw); var prevWeekData=db.weeks[prevKey];
+  db.employees.filter(function(e){return e.active;}).forEach(function(emp){
+    var rec = w.employees[emp.id]; if(!rec){ rec={carryPrevMin:0, days:{}}; w.employees[emp.id]=rec; }
+    if(!('initialized' in rec)){
+      var startCarry = emp.carryMin;
+      if(prevWeekData && prevWeekData.employees && prevWeekData.employees[emp.id] && typeof prevWeekData.employees[emp.id].newCarryMin==='number'){
+        startCarry = prevWeekData.employees[emp.id].newCarryMin;
+      }
+      rec.carryPrevMin = startCarry;
+      rec.initialized = true;
+    }
+    DAYS.forEach(function(d){ if(!rec.days[d]) rec.days[d] = {status:'Arbeitstag', note:'', start1:'', end1:'', start2:'', end2:''}; });
+  });
+  db.current={year:y,kw:kw}; saveDB(); return w;
+}
+
+function promptNewWeek(){
+  var prevY=db.current.year, prevKW=db.current.kw;
+  var kwSuggest=prevKW+1, ySuggest=prevY; if(kwSuggest>53){ kwSuggest=1; ySuggest=prevY+1; }
+  var range=isoWeekRangeLabel(ySuggest,kwSuggest);
+  var input=prompt('Neue Kalenderwoche eingeben (1–53)\nVorschlag: KW '+kwSuggest+', '+range, String(kwSuggest));
+  if(input===null) return;
+  var kw=Number(input); if(!(kw>=1 && kw<=53)){ alert('KW 1–53'); return; }
+  var y=prevY; if(prevKW===53 && kw===1) y=prevY+1;
+  initWeek(y,kw); renderWeek();
+}
+document.getElementById('btnNewWeek').onclick = promptNewWeek;
+
+// ===== Table rendering =====
+var weekTableWrap=document.getElementById('weekTableWrap');
+var weekTitleEl=document.getElementById('weekTitle');
+
+function buildWeekTable(){
+  var y=db.current.year, kw=db.current.kw; var key=weekKey(y,kw); var w=db.weeks[key]||{employees:{}};
+  var activeEmps=db.employees.filter(function(e){return e.active;});
+  if(!activeEmps.length){ weekTableWrap.innerHTML='<div class="muted">Keine aktiven Mitarbeiter</div>'; return; }
+
+  var html='<div style="overflow:auto"><table><thead><tr><th style="width:120px">Mitarbeiter</th>';
+  DAYS.forEach(function(d){ html += '<th>'+d+'</th>'; });
+  html += '<th class="col-ustd">Überstunden</th><th>Kumuliert</th></tr></thead><tbody>';
+
+  activeEmps.forEach(function(emp){
+    var rec=w.employees[emp.id]; if(!rec){ rec={carryPrevMin:emp.carryMin, days:{}}; w.employees[emp.id]=rec; }
+    DAYS.forEach(function(d){ if(!rec.days[d]) rec.days[d]={status:'Arbeitstag',note:'',start1:'',end1:'',start2:'',end2:''}; });
+    html += '<tr data-emp="'+emp.id+'"><td><strong>'+emp.name+'</strong></td>';
+    DAYS.forEach(function(day){
+      var it=rec.days[day];
+      html += '<td class="day-cell" data-day="'+day+'">'+
+        '<div class="day">'+
+          '<select data-k="status">'+ (function(){var o=''; for(var i=0;i<STATUSES.length;i++){ var s=STATUSES[i]; o+=('<option '+(s===it.status?'selected':'')+'>'+s+'</option>'); } return o; })() +'</select>'+
+          '<input type="text" class="note-input" data-k="note" placeholder="Notiz" value="'+(it.note||'')+'">'+
+          '<div class="time-row">'+
+            '<input type="time" data-k="start1" value="'+(it.start1||'')+'">'+
+            '<input type="time" data-k="end1"   value="'+(it.end1||'')+'">'+
+          '</div>'+
+          '<div class="time-row">'+
+            '<input type="time" data-k="start2" value="'+(it.start2||'')+'">'+
+            '<input type="time" data-k="end2"   value="'+(it.end2||'')+'">'+
+          '</div>'+
+        '</div>'+
+      '</td>';
+    });
+    html += '<td class="col-ustd"><div class="cellDiff pill"><div class="u-line">00:00</div><div class="u-sub">00:00</div></div></td><td class="cellCarry pill">00:00</td></tr>';
+  });
+
+  html += '</tbody></table></div>';
+  weekTableWrap.innerHTML = html;
+
+  // Enable/disable by status (note bleibt editierbar)
+  var trs = weekTableWrap.querySelectorAll('tr[data-emp]');
+  for(var i=0;i<trs.length;i++){
+    var tr=trs[i];
+    var cells=tr.querySelectorAll('td[data-day]');
+    for(var j=0;j<cells.length;j++){ applyDisableForCell(cells[j]); }
+  }
+}
+
+function applyDisableForCell(cell){
+  var S=cell.querySelector('select[data-k="status"]'); var isWork = S && S.value==='Arbeitstag';
+  var inputs=cell.querySelectorAll('input[type="time"][data-k]');
+  for(var i=0;i<inputs.length;i++){ inputs[i].disabled=!isWork; }
+}
+
+// Delegated events
+weekTableWrap.addEventListener('input', onAnyChange, true);
+weekTableWrap.addEventListener('change', onAnyChange, true);
+
+function onAnyChange(e){
+  var t=e.target;
+  if(!(t.matches && t.matches('select[data-k], input[data-k]'))) return;
+  var cell=t.closest ? t.closest('td[data-day]') : null; if(!cell) return;
+  var tr=t.closest ? t.closest('tr[data-emp]') : null; if(!tr) return;
+  var empId=tr.getAttribute('data-emp'); var day=cell.getAttribute('data-day'); var k=t.getAttribute('data-k');
+
+  var y=db.current.year, kw=db.current.kw; var w=db.weeks[weekKey(y,kw)];
+  var rec=w.employees[empId]; var dayObj=rec.days[day];
+  dayObj[k]=t.value||'';
+
+  if(k==='status'){ applyDisableForCell(cell); }
+
+  saveDB(); recalcRow(empId);
+}
+
+// ===== Recalc =====
+function recalcRow(empId){
+  var y=db.current.year, kw=db.current.kw; var w=db.weeks[weekKey(y,kw)]; var rec=w.employees[empId];
+  var emp=null; for(var i=0;i<db.employees.length;i++){ if(db.employees[i].id===empId){ emp=db.employees[i]; break; } }
+  var s=db.settings, ist=0, creditDays=0;
+
+  function num(x, fb){ x=Number(x); return isFinite(x)? x : fb; }
+  var nb = num(s && s.noBreakMax, 360);
+  var mb = num(s && s.midBreakMax, 540);
+  var p1 = num(s && s.pause1, 30);
+  var p2 = num(s && s.pause2, 45);
+
+  for(var di=0; di<DAYS.length; di++){
+    var d=DAYS[di]; var it=rec.days[d];
+    if(it.status==='Arbeitstag'){
+      var total=minutes(it.start1,it.end1,it.start2,it.end2);
+      if(total>0){
+        var pause=0;
+        if(total<=nb){ pause=0; }
+        else if(total<=mb){ pause=p1; }
+        else { pause=p2; }
+        ist += Math.max(total - pause, 0);
+      }
+    } else if (it.status==='Urlaub' || it.status==='Krank' || it.status==='Feiertag'){
+      creditDays++;
+    }
+  }
+  // Urlaub/Feiertag/Krank werden mit einem Fünftel der Wochen-Sollzeit bewertet
+  if(emp){ ist += Math.round(emp.sollMin * creditDays / 5); }
+  var diff = ist - (emp ? emp.sollMin : 0);
+  rec.weekIstMin = ist; rec.weekDiffMin = diff;
+
+  var prev=prevWeek(y,kw); var prevKey=weekKey(prev.y,prev.kw);
+  var prevRec = (db.weeks[prevKey] && db.weeks[prevKey].employees && db.weeks[prevKey].employees[empId]) ? db.weeks[prevKey].employees[empId] : null;
+  var carryPrev = (prevRec && typeof prevRec.newCarryMin==='number') ? prevRec.newCarryMin : (rec.carryPrevMin||0);
+  var newCarry = carryPrev + diff; rec.newCarryMin = newCarry;
+
+  var tr=weekTableWrap.querySelector('tr[data-emp="'+empId+'"]'); var diffCell=tr?tr.querySelector('.cellDiff'):null; var carryCell=tr?tr.querySelector('.cellCarry'):null;
+  if(diffCell){
+    diffCell.innerHTML = '<div class="u-line">'+fmt(diff)+'</div><div class="u-sub">'+fmt(newCarry)+'</div>';
+    diffCell.className = 'cellDiff pill ' + (diff>=0?'ok':(diff>= -(emp ? emp.sollMin : 0)*0.25 ? 'warn':'bad'));
+  }
+  if(carryCell){
+    carryCell.textContent = fmt(newCarry);
+    carryCell.className = 'cellCarry pill';
+  }
+  saveDB();
+}
+
+// ===== Render cycle =====
+function updatePrintTitle(){
+  var el = document.getElementById('printTitle');
+  if(el && typeof weekTitleEl !== 'undefined' && weekTitleEl){
+    el.textContent = 'Dienstplan – ' + weekTitleEl.textContent;
+  }
+}
+
+function renderWeek(){
+  var y=db.current.year, kw=db.current.kw;
+  weekTitleEl.textContent = 'KW '+kw+', '+isoWeekRangeLabel(y,kw);
+  updatePrintTitle();
+  initWeek(y,kw);
+  buildWeekTable();
+  var key=weekKey(y,kw); var w=db.weeks[key];
+  for(var id in w.employees){ if(w.employees.hasOwnProperty(id)) recalcRow(id); }
+}
+renderWeek();
+
+// ===== Print / Backup / Restore =====
+document.getElementById('btnPrint').onclick=function(){ window.print(); };
+document.getElementById('btnBackup').onclick=function(){ var blob=new Blob([JSON.stringify(db,null,2)],{type:'application/json'}); var a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='dienstplan_backup.json'; a.click(); };
+document.getElementById('btnRestore').onclick=function(){ var inp=document.createElement('input'); inp.type='file'; inp.accept='application/json'; inp.onchange=function(e){ var f=e.target.files[0]; if(!f) return; var r=new FileReader(); r.onload=function(){ try{ db=ensureDB(JSON.parse(r.result)); saveDB(); renderSettings(); renderEmployees(); renderWeek(); alert('Backup geladen'); }catch(_){ alert('Ungültige Datei'); } }; r.readAsText(f); }; inp.click(); };
+</script>
+</body>
+</html>
